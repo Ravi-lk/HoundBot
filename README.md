@@ -33,11 +33,7 @@ An offensive security tool that parses BloodHound/SharpHound ZIP dumps, performs
   * DCSync rights detection
   * GPO abuse opportunities
   * Stale/disabled privileged accounts
-<<<<<<< HEAD
-  * **BFS privilege escalation path finding** from owned user to Domain Admin
-=======
   * **BFS privilege escalation path finding** — multi-hop attack chains via ACLs, group memberships, AdminTo, CanRDP, RBCD, gMSA/LAPS credentials, and more
->>>>>>> c7f8099 (feat: enhanced BFS pathfinder + fix constrained delegation TypeError)
 * **🧠 AI-Powered Exploitation Guidance** — Sends findings to Ollama (`qwen3.5:397b`) for exact, copy-paste-ready commands using `netexec`, `impacket`, `bloodyAD`, `Certipy`, and more.
 * **🎨 Beautiful Terminal Output** — Rich-powered color-coded panels, tables, and trees.
 * **📑 Multi-Format Report Export**:
@@ -137,11 +133,7 @@ reporter.py      — Rich terminal output + markdown report generator
 | **DCSync Rights** | `CRITICAL` | Replicate domain creds — full compromise |
 | **Dangerous ACLs** | `CRITICAL` | GenericAll, WriteDacl, WriteOwner abuse |
 | **Unconstrained Delegation** | `CRITICAL` | Capture TGTs from authenticating principals |
-<<<<<<< HEAD
-| **Privesc Paths** | `CRITICAL` | BFS attack paths from owned user to DA |
-=======
 | **Privesc Paths** | `CRITICAL` | BFS attack paths via ACLs, AdminTo, RBCD, gMSA/LAPS |
->>>>>>> c7f8099 (feat: enhanced BFS pathfinder + fix constrained delegation TypeError)
 | **Constrained Delegation** | `HIGH` | S4U2Proxy abuse |
 | **GPO Abuse** | `HIGH` | Write access to GPOs |
 | **Password Never Expires** | `MEDIUM` | Stale passwords, spray targets |
