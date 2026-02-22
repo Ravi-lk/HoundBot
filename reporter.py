@@ -326,7 +326,10 @@ def print_delegation(ud_finding: dict, cd_finding: dict):
         table.add_column("Delegation Targets", style="yellow")
 
         for i, e in enumerate(cd_finding["entries"], 1):
-            targets = ", ".join(e["targets"])
+            targets = ", ".join(
+                t if isinstance(t, str) else t.get("ObjectIdentifier", t.get("Service", str(t)))
+                for t in e["targets"]
+            )
             table.add_row(str(i), e["name"], e["type"], targets)
 
         console.print()
@@ -628,7 +631,10 @@ def generate_markdown_report(
         lines.append("| Source | Type | Delegation Targets |")
         lines.append("|--------|------|--------------------|")
         for e in cd["entries"]:
-            targets = ", ".join(e["targets"])
+            targets = ", ".join(
+                t if isinstance(t, str) else t.get("ObjectIdentifier", t.get("Service", str(t)))
+                for t in e["targets"]
+            )
             lines.append(f"| {e['name']} | {e['type']} | {targets} |")
         lines.append("")
 

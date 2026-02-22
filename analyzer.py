@@ -15,8 +15,26 @@ DANGEROUS_RIGHTS = {
     "AddSelf", "WriteSPN", "AddKeyCredentialLink",
 }
 
-# High-value group RIDs
-HIGH_VALUE_RIDS = {"512", "516", "518", "519", "544", "548", "549", "551"}
+# Extended rights for BFS pathfinding (includes credential-access edges)
+PATHFINDER_RIGHTS = DANGEROUS_RIGHTS | {
+    "Owns", "ReadGMSAPassword", "ReadLAPSPassword",
+    "AddAllowedToAct", "WriteAccountRestrictions",
+}
+
+# Well-known local group SID suffixes for AdminTo/CanRDP/etc. edges
+LOCAL_ADMIN_SID_SUFFIX = "-544"       # Administrators
+LOCAL_RDP_SID_SUFFIX = "-555"         # Remote Desktop Users
+LOCAL_DCOM_SID_SUFFIX = "-562"        # Distributed COM Users
+LOCAL_PSREMOTE_SID_SUFFIX = "-580"    # Remote Management Users
+
+# High-value domain group RIDs (appended to {domain_sid}-RID)
+HIGH_VALUE_DOMAIN_RIDS = {"512", "516", "518", "519"}
+
+# High-value builtin group RIDs (use DOMAIN-S-1-5-32-RID format)
+HIGH_VALUE_BUILTIN_RIDS = {"544", "548", "549", "551"}
+
+# Combined set for backward compatibility
+HIGH_VALUE_RIDS = HIGH_VALUE_DOMAIN_RIDS | HIGH_VALUE_BUILTIN_RIDS
 
 # Well-known builtin/default SIDs to exclude from "interesting" findings
 BUILTIN_PRINCIPAL_PATTERNS = {
@@ -521,7 +539,8 @@ def _resolve_user_to_sid(data: dict, username: str) -> str | None:
 def _find_privesc_paths(data: dict, owned_sid: str) -> dict:
     """
     Find privilege escalation paths from owned user to high-value targets
-    using BFS through ACL chains and group memberships.
+    using BFS through ACL chains, group memberships, local admin rights,
+    RBCD (AllowedToAct), sessions, and credential-access edges.
     """
     domain_sid = get_domain_sid(data)
 
@@ -531,10 +550,22 @@ def _find_privesc_paths(data: dict, owned_sid: str) -> dict:
         if grp.get("Properties", {}).get("highvalue", False):
             high_value_targets.add(sid)
 
-    # Also add specific well-known groups
+    # Add well-known domain groups ({domain_sid}-RID)
     if domain_sid:
-        for rid in HIGH_VALUE_RIDS:
+        for rid in HIGH_VALUE_DOMAIN_RIDS:
             high_value_targets.add(f"{domain_sid}-{rid}")
+
+    # Add builtin groups: scan all group SIDs for builtin RID suffix patterns
+    # BloodHound uses "DOMAIN-S-1-5-32-RID" format for builtin groups
+    for sid in data["groups"]:
+        for rid in HIGH_VALUE_BUILTIN_RIDS:
+            if sid.endswith(f"-{rid}") and ("S-1-5-32" in sid or sid.endswith(f"-{rid}")):
+                high_value_targets.add(sid)
+
+    # Mark Domain Controllers as high-value targets
+    for sid, comp in data["computers"].items():
+        if comp.get("IsDC", False):
+            high_value_targets.add(sid)
 
     # Build attack graph: edges represent exploitable relationships
     # edge = (source_sid, target_sid, relationship_type)
@@ -545,10 +576,10 @@ def _find_privesc_paths(data: dict, owned_sid: str) -> dict:
         for member_sid in members:
             attack_graph[member_sid].append((group_sid, "MemberOf"))
 
-    # 2. ACL-based edges: dangerous permissions = attack edges
+    # 2. ACL-based edges: expanded set including Owns, ReadGMSA, ReadLAPS, RBCD, etc.
     for ace in data["aces"]:
         right = ace.get("RightName", "")
-        if right not in DANGEROUS_RIGHTS:
+        if right not in PATHFINDER_RIGHTS:
             continue
 
         principal_sid = ace.get("PrincipalSID", "")
@@ -557,15 +588,49 @@ def _find_privesc_paths(data: dict, owned_sid: str) -> dict:
         if principal_sid and target_sid and principal_sid != target_sid:
             attack_graph[principal_sid].append((target_sid, right))
 
-    # 3. Also expand: if principal is a group, all members of that group have the edge
-    # (This is handled implicitly by MemberOf chains)
+    # 3. Computer-based edges from LocalGroups, AllowedToAct, etc.
+    for comp_sid, comp in data["computers"].items():
+        # AllowedToAct (Resource-Based Constrained Delegation)
+        for entry in comp.get("AllowedToAct", []) or []:
+            actor_sid = entry if isinstance(entry, str) else entry.get("ObjectIdentifier", "")
+            if actor_sid:
+                attack_graph[actor_sid].append((comp_sid, "AllowedToAct"))
+
+        # LocalGroups: extract AdminTo, CanRDP, CanPSRemote, ExecuteDCOM
+        local_groups = comp.get("LocalGroups", [])
+        if isinstance(local_groups, dict):
+            local_groups = local_groups.get("Results", [])
+        for lg in local_groups or []:
+            lg_sid = lg.get("ObjectIdentifier", "")
+            results = lg.get("Results", [])
+            if not results:
+                continue
+
+            # Determine relationship type from the local group SID suffix
+            if lg_sid.endswith(LOCAL_ADMIN_SID_SUFFIX):
+                rel_type = "AdminTo"
+            elif lg_sid.endswith(LOCAL_RDP_SID_SUFFIX):
+                rel_type = "CanRDP"
+            elif lg_sid.endswith(LOCAL_PSREMOTE_SID_SUFFIX):
+                rel_type = "CanPSRemote"
+            elif lg_sid.endswith(LOCAL_DCOM_SID_SUFFIX):
+                rel_type = "ExecuteDCOM"
+            else:
+                continue  # Skip non-exploitable local groups
+
+            for member in results:
+                member_sid = member.get("ObjectIdentifier", "")
+                if member_sid and member_sid != comp_sid:
+                    attack_graph[member_sid].append((comp_sid, rel_type))
+
+    # 4. Implicit: MemberOf chains propagate through the graph during BFS
 
     # BFS from owned user
     paths = []
     queue = [(owned_sid, [(owned_sid, "START", resolve_name(owned_sid, data))])]
     visited = {owned_sid}
     max_depth = 8
-    max_paths = 15
+    max_paths = 20
 
     while queue and len(paths) < max_paths:
         current_sid, path = queue.pop(0)
